@@ -1,13 +1,34 @@
 from transformers import pipeline
 from sentence_transformers import SentenceTransformer, util
 
-# Only use pipelines that are supported in this transformers version
-classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-sentiment_model = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
-similarity_model = SentenceTransformer("all-MiniLM-L6-v2")
+# Lazy loading — models load only on first use, not at startup
+_classifier = None
+_sentiment_model = None
+_similarity_model = None
+
+def get_classifier():
+    global _classifier
+    if _classifier is None:
+        # ~90MB instead of 1.6GB — same zero-shot classification
+        _classifier = pipeline("zero-shot-classification", model="typeform/distilbert-base-uncased-mnli")
+    return _classifier
+
+def get_sentiment_model():
+    global _sentiment_model
+    if _sentiment_model is None:
+        # ~65MB instead of 500MB
+        _sentiment_model = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+    return _sentiment_model
+
+def get_similarity_model():
+    global _similarity_model
+    if _similarity_model is None:
+        # already small, keeping it
+        _similarity_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _similarity_model
+
 
 def summarize(text):
-    # Extractive summary - first 2 sentences, no model needed
     if not text:
         return ""
     sentences = [s.strip() for s in text.replace("\n", " ").split(".") if len(s.strip()) > 20]
@@ -16,14 +37,14 @@ def summarize(text):
 
 def classify_difficulty(text):
     try:
-        result = classifier(text[:512], candidate_labels=["Beginner", "Intermediate", "Advanced"])
+        result = get_classifier()(text[:512], candidate_labels=["Beginner", "Intermediate", "Advanced"])
         return result["labels"][0]
     except:
         return "Intermediate"
 
 def generate_tags(text):
     try:
-        result = classifier(text[:512], candidate_labels=["ML", "Web", "Automation", "API", "NLP", "Data", "Mobile", "Game"])
+        result = get_classifier()(text[:512], candidate_labels=["ML", "Web", "Automation", "API", "NLP", "Data", "Mobile", "Game"])
         return result["labels"][:3]
     except:
         return []
@@ -34,12 +55,12 @@ def analyze_sentiment(comments):
     try:
         scores = []
         for comment in comments[:5]:
-            result = sentiment_model(comment[:512])
+            result = get_sentiment_model()(comment[:512])
             label = result[0]["label"].lower()
             score = result[0]["score"]
-            if "pos" in label:
+            if "pos" in label or label == "positive":
                 scores.append(score)
-            elif "neg" in label:
+            elif "neg" in label or label == "negative":
                 scores.append(1 - score)
             else:
                 scores.append(0.5)
