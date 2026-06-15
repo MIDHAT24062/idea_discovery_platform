@@ -15,7 +15,7 @@ from backend.database.db_operations import (
     save_session, get_all_sessions, get_session, delete_session,
 )
 from backend.auth.auth_utils import hash_password, verify_password, create_token, decode_token
-from backend.scraper.scraper import fetch_all
+from backend.scrapper.scraper import fetch_all
 from backend.cleaner.cleaner import clean_posts
 from backend.ml_engine.ml_engine import process_posts
 from backend.ranker.ranker import rank
@@ -31,7 +31,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-cache = redis.Redis(host="localhost", port=6379, decode_responses=True)
+# ── Redis (optional cache) ────────────────────────────────────────────────────
+
+redis_url = os.getenv("REDIS_URL", "")
+try:
+    if redis_url:
+        cache = redis.Redis.from_url(redis_url, decode_responses=True)
+        cache.ping()
+        CACHE_ENABLED = True
+        print("✅ Redis connected")
+    else:
+        CACHE_ENABLED = False
+        cache = None
+        print("⚠️ No REDIS_URL — caching disabled")
+except Exception as e:
+    CACHE_ENABLED = False
+    cache = None
+    print(f"⚠️ Redis unavailable ({e}) — caching disabled")
+
+# ── Database ──────────────────────────────────────────────────────────────────
 
 init_db()
 
@@ -43,7 +61,6 @@ bearer_scheme = HTTPBearer(auto_error=False)
 def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
-    """Dependency – raises 401 if token missing/invalid."""
     if not credentials:
         raise HTTPException(status_code=401, detail="Not authenticated")
     payload = decode_token(credentials.credentials)
@@ -55,7 +72,6 @@ def get_current_user_id(
 def optional_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str | None:
-    """Dependency – returns user_id or None (no error for missing token)."""
     if not credentials:
         return None
     payload = decode_token(credentials.credentials)
@@ -126,8 +142,6 @@ def login(req: LoginRequest):
 
 @app.post("/auth/logout")
 def logout(user_id: str = Depends(get_current_user_id)):
-    # Stateless JWT – nothing to invalidate server-side.
-    # Client discards the token. Could add a denylist here if needed.
     return {"detail": "Logged out."}
 
 
@@ -147,13 +161,18 @@ async def search(
     user_id: str | None = Depends(optional_user_id),
 ):
     cache_key = f"search:{request.query}:{request.difficulty}"
-    cached = cache.get(cache_key)
-    if cached:
-        data = json.loads(cached)
-        # Still save a fresh session for this user so their history is updated
-        new_session_id = str(uuid.uuid4())
-        save_session(new_session_id, request.query, data["ideas"], user_id=user_id)
-        return {"session_id": new_session_id, "ideas": data["ideas"]}
+
+    # Try cache
+    if CACHE_ENABLED:
+        try:
+            cached = cache.get(cache_key)
+            if cached:
+                data = json.loads(cached)
+                new_session_id = str(uuid.uuid4())
+                save_session(new_session_id, request.query, data["ideas"], user_id=user_id)
+                return {"session_id": new_session_id, "ideas": data["ideas"]}
+        except Exception:
+            pass  # cache failed, continue without it
 
     raw_posts = fetch_all(request.query)
     cleaned = clean_posts(raw_posts)
@@ -167,7 +186,14 @@ async def search(
     save_session(session_id, request.query, ranked, user_id=user_id)
 
     result = {"session_id": session_id, "ideas": ranked}
-    cache.setex(cache_key, 600, json.dumps(result))
+
+    # Save to cache
+    if CACHE_ENABLED:
+        try:
+            cache.setex(cache_key, 600, json.dumps(result))
+        except Exception:
+            pass  # cache failed, no big deal
+
     return result
 
 
@@ -175,7 +201,6 @@ async def search(
 
 @app.get("/history")
 def get_history(user_id: str = Depends(get_current_user_id)):
-    """Return sessions scoped to the authenticated user."""
     sessions = get_all_sessions(user_id=user_id)
     return {"sessions": sessions}
 
