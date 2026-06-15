@@ -15,12 +15,12 @@ from backend.database.db_operations import (
     save_session, get_all_sessions, get_session, delete_session,
 )
 from backend.auth.auth_utils import hash_password, verify_password, create_token, decode_token
-from backend.scraper.scraper import fetch_all
+from backend.scraper.scraper import fetch_all          # now async
 from backend.cleaner.cleaner import clean_posts
 from backend.ml_engine.ml_engine import process_posts
 from backend.ranker.ranker import rank
 
-# ── App setup ────────────────────────────────────────────────────────────────
+# ── App setup ─────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="IDP – Idea Discovery Platform")
 
@@ -43,17 +43,17 @@ try:
     else:
         CACHE_ENABLED = False
         cache = None
-        print("⚠️ No REDIS_URL — caching disabled")
+        print("⚠️  No REDIS_URL — caching disabled")
 except Exception as e:
     CACHE_ENABLED = False
     cache = None
-    print(f"⚠️ Redis unavailable ({e}) — caching disabled")
+    print(f"⚠️  Redis unavailable ({e}) — caching disabled")
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
 init_db()
 
-# ── Auth helpers ─────────────────────────────────────────────────────────────
+# ── Auth helpers ──────────────────────────────────────────────────────────────
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -78,7 +78,7 @@ def optional_user_id(
     return payload["sub"] if payload else None
 
 
-# ── Pydantic schemas ─────────────────────────────────────────────────────────
+# ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
     username: str
@@ -162,7 +162,7 @@ async def search(
 ):
     cache_key = f"search:{request.query}:{request.difficulty}"
 
-    # Try cache
+    # Try cache first
     if CACHE_ENABLED:
         try:
             cached = cache.get(cache_key)
@@ -172,9 +172,10 @@ async def search(
                 save_session(new_session_id, request.query, data["ideas"], user_id=user_id)
                 return {"session_id": new_session_id, "ideas": data["ideas"]}
         except Exception:
-            pass  # cache failed, continue without it
+            pass
 
-    raw_posts = fetch_all(request.query)
+    # fetch_all is now truly async — no event loop blocking
+    raw_posts = await fetch_all(request.query)
     cleaned = clean_posts(raw_posts)
     enriched = process_posts(cleaned)
     ranked = rank(enriched)
@@ -187,12 +188,11 @@ async def search(
 
     result = {"session_id": session_id, "ideas": ranked}
 
-    # Save to cache
     if CACHE_ENABLED:
         try:
             cache.setex(cache_key, 600, json.dumps(result))
         except Exception:
-            pass  # cache failed, no big deal
+            pass
 
     return result
 
