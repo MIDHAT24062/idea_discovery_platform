@@ -1,15 +1,9 @@
-from sentence_transformers import SentenceTransformer, util
+"""
+Lightweight ranker — no sentence-transformers, no torch.
+Deduplication uses simple title-word overlap instead of embeddings.
+"""
+
 from datetime import datetime
-
-# Load lazily so startup doesn't block/crash on Railway cold boot
-_similarity_model = None
-
-
-def get_similarity_model():
-    global _similarity_model
-    if _similarity_model is None:
-        _similarity_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _similarity_model
 
 
 def normalize(values: list) -> list:
@@ -18,7 +12,7 @@ def normalize(values: list) -> list:
     min_val = min(values)
     max_val = max(values)
     if max_val == min_val:
-        return [0.5 for _ in values]
+        return [0.5] * len(values)
     return [(v - min_val) / (max_val - min_val) for v in values]
 
 
@@ -35,37 +29,44 @@ def compute_recency(posted_at) -> float:
         return 0.5
 
 
-def remove_duplicates(ideas: list, threshold: float = 0.85) -> list:
-    if not ideas:
-        return ideas
-    model = get_similarity_model()
-    summaries = [i["summary"] for i in ideas]
-    embeddings = model.encode(summaries)
-    kept = []
-    for i in range(len(ideas)):
+def _title_words(title: str) -> set:
+    stopwords = {"a", "an", "the", "to", "of", "in", "for", "on", "with", "and", "or", "is", "how"}
+    return {w.lower() for w in title.split() if w.lower() not in stopwords and len(w) > 2}
+
+
+def remove_duplicates(ideas: list, threshold: float = 0.6) -> list:
+    """Remove near-duplicate titles using word-overlap Jaccard similarity."""
+    kept_indices = []
+    kept_word_sets = []
+    for i, idea in enumerate(ideas):
+        words = _title_words(idea["title"])
         is_duplicate = False
-        for j in kept:
-            sim = util.cos_sim(embeddings[i], embeddings[j]).item()
-            if sim > threshold:
+        for kept_words in kept_word_sets:
+            union = words | kept_words
+            if not union:
+                continue
+            jaccard = len(words & kept_words) / len(union)
+            if jaccard >= threshold:
                 is_duplicate = True
                 break
         if not is_duplicate:
-            kept.append(i)
-    return [ideas[i] for i in kept]
+            kept_indices.append(i)
+            kept_word_sets.append(words)
+    return [ideas[i] for i in kept_indices]
 
 
 def rank(enriched_ideas: list) -> list:
     if not enriched_ideas:
         return []
 
-    upvotes = normalize([i["upvotes"] for i in enriched_ideas])
-    comments = normalize([len(i.get("comments", [])) for i in enriched_ideas])
+    upvotes_norm  = normalize([i["upvotes"] for i in enriched_ideas])
+    comments_norm = normalize([len(i.get("comments", [])) for i in enriched_ideas])
 
     for idx, idea in enumerate(enriched_ideas):
         recency = compute_recency(idea["posted_at"])
         score = (
-            upvotes[idx] * 0.4
-            + comments[idx] * 0.2
+            upvotes_norm[idx]  * 0.4
+            + comments_norm[idx] * 0.2
             + idea["sentiment_score"] * 0.3
             + recency * 0.1
         )
