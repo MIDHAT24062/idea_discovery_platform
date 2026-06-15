@@ -15,7 +15,7 @@ from backend.database.db_operations import (
     save_session, get_all_sessions, get_session, delete_session,
 )
 from backend.auth.auth_utils import hash_password, verify_password, create_token, decode_token
-from backend.scrapper.scraper import fetch_all
+from backend.scraper.scraper import fetch_all
 from backend.cleaner.cleaner import clean_posts
 from backend.ml_engine.ml_engine import process_posts
 from backend.ranker.ranker import rank
