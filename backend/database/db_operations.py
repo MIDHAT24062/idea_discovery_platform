@@ -61,20 +61,27 @@ def save_session(session_id: str, query: str, ideas: list, user_id: str | None =
         session = Session(id=session_id, query=query, timestamp=datetime.utcnow(), user_id=user_id)
         db.add(session)
         for idea in ideas:
+            tags_val = idea.get("tags", [])
+            if isinstance(tags_val, list):
+                tags_val = ", ".join(tags_val)
             db_idea = Idea(
                 session_id=session_id,
-                title=idea.get("title", ""),
-                summary=idea.get("summary", ""),
-                difficulty=idea.get("difficulty", ""),
-                tags=", ".join(idea.get("tags", [])),
-                score=idea.get("score", 0.0),
-                source=idea.get("source", ""),
-                url=idea.get("url", ""),
-                sentiment_score=idea.get("sentiment_score", 0.0),
-                upvotes=idea.get("upvotes", 0),
+                title=str(idea.get("title", "") or "")[:500],
+                summary=str(idea.get("summary", "") or "")[:2000],
+                difficulty=str(idea.get("difficulty", "") or "")[:50],
+                tags=str(tags_val or "")[:500],
+                score=float(idea.get("score") or 0.0),
+                source=str(idea.get("source", "") or "")[:100],
+                url=str(idea.get("url", "") or "")[:1000],
+                sentiment_score=float(idea.get("sentiment_score") or 0.0),
+                upvotes=int(idea.get("upvotes") or 0),
             )
             db.add(db_idea)
         db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"save_session ERROR: {type(e).__name__}: {e}")
+        raise  # re-raise so search endpoint catches it and returns real error
     finally:
         db.close()
 
