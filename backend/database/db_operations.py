@@ -60,6 +60,7 @@ def save_session(session_id: str, query: str, ideas: list, user_id: str | None =
     try:
         session = Session(id=session_id, query=query, timestamp=datetime.utcnow(), user_id=user_id)
         db.add(session)
+        db.flush()  # write session row to DB before inserting ideas (FK constraint)
         for idea in ideas:
             tags_val = idea.get("tags", [])
             if isinstance(tags_val, list):
