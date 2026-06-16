@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Float, DateTime, Text, ForeignKey,
+    create_engine, Column, String, Integer, Float, DateTime, Text, ForeignKey, text,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -55,4 +55,22 @@ class Idea(Base):
 
 
 def init_db():
+    # create_all only creates tables that don't exist — won't alter existing ones
     Base.metadata.create_all(bind=engine)
+    # Manually add missing columns if they don't exist (safe migration)
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id VARCHAR REFERENCES users(id)"))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE ideas ADD COLUMN IF NOT EXISTS sentiment_score FLOAT"))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("ALTER TABLE ideas ADD COLUMN IF NOT EXISTS upvotes INTEGER"))
+            conn.commit()
+        except Exception:
+            conn.rollback()
